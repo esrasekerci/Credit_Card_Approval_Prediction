@@ -1,0 +1,1711 @@
+---
+title: "STAT412_PROJECT"
+author: "E. ŞEKERCİ"
+date: "1/7/2022"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+
+# Initial Settings
+
+
+```{r}
+## Loading packages
+library(readr)
+library(DAAG)
+library(ggplot2)
+library(tidyverse)
+library(pastecs)
+library(mice)
+library(VIM)
+library(olsrr)
+library(rcompanion)
+library(moments)
+library(dplyr)
+library(hrbrthemes)
+library(ROSE)
+library(modelr) 
+library(broom)
+library(caret)
+library(missForest)
+library(janitor)
+library(corrplot)
+library(ggmosaic)
+library(caTools)
+library(arsenal)
+library(Boruta)
+library(moments)
+library(wesanderson)
+library(data.table)
+library(hrbrthemes)
+library(viridis)
+library(vcd)
+library(oddsratio)
+library("vtreat")
+library(InformationValue)
+#remotes::install_github("cran/DMwR")
+library(DMwR)
+library(pROC)
+library(MLmetrics)
+library(ConfusionTableR)
+library(mlbench)
+library(randomForest)
+library(e1071)
+library(neuralnet)
+library(GGally)
+library(xgboost)
+library(lightgbm)
+#devtools::install_url('https://github.com/catboost/catboost/releases/download/v0.7.2/catboost-R-Windows-0.7.2.tgz', args = c("--no-multiarch"))
+library(catboost)
+library(tidymodels)
+library(mlbench)
+library(tidyverse)
+```
+
+```{r}
+## Loading our data set
+application <- read_csv("application_record.csv")
+```
+```{r}
+credit <- read_csv("credit_record.csv")
+```
+
+```{r}
+## Preview application data
+dplyr::glimpse(application)
+```
+
+```{r}
+## Preview credit data
+dplyr::glimpse(credit)
+```
+
+
+# Data Cleaning and Tidying
+
+
+First let us rearrange the column names and check the change we made.
+
+```{r}
+colnames(application) <- c("id", "gender", "own_car", "own_realty", "own_children", "amt_income", "income_type", "education_type", "family_status", "housing_type", "days_birth", "days_employed","mobile", "work_phone", "phone", "email", "occupation", "family_size")
+head(application)
+```
+
+```{r}
+## Editing the column names and checking the changes for credit data set
+colnames(credit) <- c("id", "month_balance", "status")
+head(credit)
+```
+
+```{r}
+str(application)
+```
+
+```{r} 
+## Change the class of type as factor. Note: I fix the class of occupation later because I got an error while replacing the missing values with "other" for the occupation column.
+names <- c('own_car', 'own_realty', 'income_type','education_type','family_status','housing_type','work_phone','mobile','phone','email', 'gender')
+application[,names] <- lapply(application[,names] , factor)
+str(application)
+```
+The output shows the class of the variables. At this stage, we need to be careful because if any variable has a wrong class, this will affect the whole analysis negatively.
+
+```{r}
+## Looking for unique values in the application data set
+lapply(application[,names] , unique)
+```
+
+The ”mobile” column is omitted because it contains only one unique value.
+
+```{r}
+application$mobile <- NULL
+```
+
+
+The existence of duplicated id values was discussed in the project source link, so we are deleting the duplicated id values from our data in the following code lines.
+
+```{r}
+## The total rows are 438,557. This means it has duplicates.
+length(unique(application$id))
+```
+
+```{r}
+## Keeping the first of the repeated id values in the data set and discarding the others
+application <- application[!duplicated(application$id), ]
+dim(application)
+```
+
+Before we deleted the duplicate ids we had 438,557 rows and now we have 438,510.
+
+```{r}
+#summary(comparedf(application,credit, by = "id"))
+```
+
+
+# Missingness
+
+
+```{r}
+## Checking missing values for each variables
+sapply(application, function(x) sum(is.na(x)))
+```
+
+```{r}
+application$occupation <- NULL
+```
+
+```{r}
+#application <- application %>%
+#  mutate(
+#    # replace NAs where is_working is 0 with 0
+#    occupation = ifelse(is.na(occupation) & is_working == 0, "0", occupation)
+#  )
+```
+
+```{r}
+## Encoding every NA value that the occupation variable has as "other"
+#application[is.na(application)] <- "Other"
+```
+
+
+```{r}
+## Changing the class of the occupation to factor
+#application$occupation <- as.factor(application$occupation)
+```
+
+
+The easiest way to obtain of summary statistics of the variables in the data set;
+
+```{r}
+summary(application)
+```
+
+The average of amount of income(annual) is 187525. The minimum of amount of income by annual is 26100, while its maximum is 6750000. The half of the amount of money on an annual basis is below or above 160940. 25% of the observations is below 121500 and above 225000. Lastly, it can be said that the variable might have a right skewed distribution since there is a considerable difference between third quantile and maximum value.
+
+Also, out of 438510 credit card applicant, 294406 of them is female, and the rest is male(144104). For education_type variable, the least number of values are those with academic degrees.
+
+We do not have encounter any NA values in our application data set(not counting the occupation), so now we generate 6.5 percent NA values for each variables except id, gender and occupation columns. Note: it was observed that the mice package runs very slowly when more NA values are generated therefore, I chose the lowest limit of the desired NA percentage.
+
+
+```{r}
+## Introducing 5% of missing values to the application data set
+set.seed(412)
+slcted <- prodNA(application[,c(3,4,5,6,7,8,9,10,11,12,13,14,15,16)], noNA = 0.06)
+
+## Merge and make a data frame
+app_miss <- data.frame(application[,c(1,2)],slcted)
+head(app_miss)
+```
+
+```{r}
+## Examining how many NA values are produced
+sapply(app_miss, function(x) sum(is.na(x)))
+```
+
+```{r}
+## Checking the percentages of NA values
+(colMeans(is.na(app_miss)))*100
+```
+
+```{r}
+DataExplorer::plot_missing(app_miss)
+```
+```{r}
+(sum(is.na(app_miss))/prod(dim(app_miss)))*100
+```
+We have a total of 5.4 percent missing values in our data set. Now we will make imputation for the missing values by using the mice package.
+
+```{r}
+visdat::vis_miss(app_miss, warn_large_data=FALSE)
+```
+
+```{r}
+visdat::vis_dat(app_miss, warn_large_data=FALSE)
+```
+
+```{r}
+init = mice(app_miss, maxit=0) 
+meth = init$method
+```
+
+```{r}
+str(app_miss)
+```
+
+There are specific methods for continues, binary and ordinal variables, therefore I set different methods for each variable.
+
+```{r}
+meth[c(3,4,13,14,15)]="logreg" 
+meth[c(5,6,7,11,12,16)]="norm" 
+meth[c(2,7,8,9,10)]="polyreg"
+```
+
+```{r}
+set.seed(123)
+mice_imputes = mice(app_miss, m=5, method = meth, maxit = 0)
+```
+
+```{r}
+mice_imputes$method
+```
+
+```{r}
+summary(app_miss)
+```
+```{r}
+appl = complete(mice_imputes,1)
+```
+
+```{r}
+summary(appl)
+```
+
+```{r}
+summary(application)
+```
+
+Above are the summary statistics of the first version of our data set (application), and the later version (appl) in which we created missing values and then imputed. Our averages have not changed much in our numerical variables, and our ratios for our categorical values are close to each other, so we can say that the mice package makes a good imputation and we can move on to the feature engineering phase.
+
+
+```{r}
+## Checking missing values for each variables
+sapply(credit, function(x) sum(is.na(x)))
+```
+
+Here we determine the number of missing data in the credit data. The "status" variable in this data will be our dependent variable, it was decided not to add any NA values to credit data set.
+
+
+
+# Feature Engineering
+
+```{r}
+summary(credit)
+```
+
+
+```{r}
+summary(credit$month_balance)
+```
+
+```{r}
+credit%>%
+  group_by(id, status)%>%
+  summarise(n = n())
+```
+
+
+```{r}
+## I will focus on the "month_balance" column a few lines down. I believe that it needs a special intervention.
+credit$status <- as.character(credit$status)
+```
+
+
+```{r}
+## Search for unique values in the status column
+unique(credit$status)
+```
+
+In order to determine the customer who fits the definition of bad, I choose users who overdue for more than 60 days as target risk users. Those samples are marked as 'Yes', else are 'No'.`
+
+
+```{r}
+MyFunction <- function(x){
+  month_begin = length(x)
+  paid_off = sum(x == 'C')
+  num_pastdues = sum(x %in% 0:5)
+  no_loan = sum(x == 'X')
+  target = ifelse(any(x %in% 2:5), 1, 0)
+  return(c(month_begin=month_begin, paid_off=paid_off, num_pastdues=num_pastdues, no_loan=no_loan, target=target))
+}
+
+res <- t(sapply(split(credit$status, credit$id), MyFunction))
+```
+
+```{r}
+res_df <- data.frame(res)
+res_df$id <- rownames(res_df)
+rownames(res_df) <- NULL
+
+head(res_df)
+```
+
+
+
+```{r}
+res_df %>% count(target)
+```
+
+```{r}
+df <- merge(appl, res_df, by.x = "id", by.y = "id")
+length(unique(df$id))
+```
+
+```{r}
+df %>% count(target)
+```
+
+```{r}
+table <- table(df$target)
+prop.table(table)
+```
+
+```{r}
+str(df)
+```
+
+## Categoric features
+
+```{r}
+df$target <- as.factor(df$target)
+```
+
+```{r}
+df <- df %>% mutate(gender = recode(gender, 
+  "F" = "0",
+  "M" = "1"))
+```
+
+```{r}
+df <- df %>% mutate(own_car = recode(own_car, 
+  "N" = "0",
+  "Y" = "1"))
+```
+
+```{r}
+df <- df %>% mutate(own_realty= recode(own_realty, 
+  "N" = "0",
+  "Y" = "1"))
+```
+
+```{r}
+df <- df%>% mutate(is_working= recode(income_type, 
+  "Commercial associate" = "1",
+  "State servant" = "1",
+  "Working" = "1",
+  "Pensioner" = "0",
+  "Student" = "0"))
+```
+
+```{r}
+df <- df %>% mutate(in_relationship= recode(family_status, 
+  "Civil marriage" = "1",
+  "Married" = "1",
+  "Single / not married" = "0",
+  "Separated" = "0",
+  "Widow" = "0"))
+```
+
+```{r}
+df %>% purrr::map(levels)
+```
+
+```{r}
+## Examining factor variables
+f = c()
+for(i in colnames(df)){
+    if(is.factor(df[,i])){
+        f <- append(f, i)
+    }
+}
+
+summary(df[f])
+```
+
+```{r}
+Hmisc::describe(df[f])
+```
+
+
+## Continuous features
+
+The dates were given as negative values backwards from current day, we reconstructed the employment and age columns on an annual basis. Then, we create two new variables; one is to represent experience by using days_employed column and the other represents age groups at certain intervals.
+
+```{r}
+df <- df %>% mutate(age = round(abs(days_birth)/365), age_group = round(age/10),
+                                days_employed = ifelse(days_employed == 365243,0,days_employed),
+                                experience = round(abs(days_employed)/365))
+```
+
+
+```{r}
+summary(df$age)
+```
+
+The minimum and maximum age in the data are 21 and 69, respectively. Half of the age of credit card applicants are below and above 43. Also, the average age is 43.79.
+
+
+```{r}
+summary(df$experience)
+```
+
+The minimum and maximum year of experience in the data are 0 and 48, respectively. Half of the customers have experience below and above 4. Also, the average year of experience is 5.963 for our applicants. Lastly, It can be said that we could expect a right skewed distribution for the experience since there is a huge gap between third quartile and maximum value.
+
+
+```{r}
+df <- df %>% 
+  mutate(
+    ## Create categories
+    age_group = dplyr::case_when(
+      age_group == 2 ~ "18-24",
+      age_group == 3 ~ "25-34",
+      age_group == 4 ~ "35-44",
+      age_group == 5 ~ "35-54",
+      age_group == 6 ~ "55-64",
+      age_group == 7 ~ "> 64",
+    ),
+    ## Convert to factor
+    age_group = factor(
+      age_group,
+      level = c("18-24","25-34","35-44","35-54","55-64","> 64")
+    )
+  )
+```
+
+
+Here, I also want to use it in visualization by dividing the annual salary variable into two, based on a limit close to the average value. Later, I do not like this idea.
+
+```{r}
+#appl <- appl %>% 
+#  mutate(
+    ## Create categories
+#    income_group = dplyr::case_when(
+#      amt_income <= 180000 ~ "<= 180K",
+#      amt_income > 180000             ~ "> 180K"
+#    ),
+#    ## Convert to factor
+#   income_group = factor(
+#    income_group,
+#      level = c("<= 180K","> 180K")
+#    )
+#  )
+```
+
+
+
+```{r}
+n = c()
+for(i in colnames(df)){
+    if(is.numeric(df[,i])){
+        n <- append(n, i)
+    }
+}
+
+n = n[n != "id"]
+n = n[n != "days_birth"]
+n = n[n != "days_employed"]
+stat.desc(df[n])
+```
+
+```{r}
+summary(df[n])
+```
+
+```{r}
+df[n] %>%
+  keep(is.numeric) %>% 
+  gather() %>%
+  ggplot(aes(value)) +
+    facet_wrap(~key, scales = "free") +
+    geom_density()   
+```
+
+paid_off, no_loan and num_pastdues variables are not included in the model otherwise they will cause over fitting, I just generated them to examine their relationship with other variables. Therefore, I will not include them in any transformation applied to numeric values.
+
+
+
+# Exploratory Data Analysis
+
+
+**Question 1: What is the distribution of numerical values in our data?**
+
+_ We can see that amt_income and experience have right-skewed distribution and there are only a few unique values for family_size and own_children. 
+
+
+```{r}
+n <- (df[,c("age","amt_income","experience","family_size","month_begin","own_children")])
+```
+
+```{r}
+par(mfrow=c(2,3), mar=c(3,3,2,0.4))
+for (j in 1:ncol(n)) {
+  hist(n[,j], xlab=colnames(n)[j],
+       main=paste("Histogram of", colnames(n)[j]),
+       col="lightblue", breaks=50)
+}
+```
+
+```{r}
+skewness(n$amt_income)
+skewness(n$experience)
+skewness(n$family_size)
+```
+
+```{r}
+kurtosis(n$amt_income)
+kurtosis(n$experience)
+kurtosis(n$family_size)
+```
+
+I am going to interested in this part in data preprocessing, now I do not want to scale them because they will be used in visualization. Let's focus on finding estimators that are not affected by outliers available in the dataset. First, I thought about using z-score to eliminate those outliers however now I am not quite sure to remove them due to the fact that outliers are not always bad data points. To increase my models' predictive ability, I would consider this step later again.
+
+```{r}
+# hist
+g1 <- ggplot(df, aes(x=amt_income)) + 
+ geom_histogram(aes(y=..density..), colour="black", fill="white")+
+ geom_density(alpha=.2, fill="#FF6666")+ 
+  labs(x = "", y = "")
+
+# boxplot
+g2 <- ggplot(df, aes(y=amt_income)) + 
+ geom_boxplot(aes(x=""), colour="black", fill="white")+
+  coord_flip()+ 
+  labs(x = "", y = "")
+
+g1
+g2
+```
+
+
+```{r}
+# hist
+g1 <- ggplot(df, aes(x=experience)) + 
+ geom_histogram(aes(y=..density..), colour="black", fill="white")+
+ geom_density(alpha=.2, fill="#FF6666")+ 
+  labs(x = "", y = "")
+
+# boxplot
+g2 <- ggplot(df, aes(y=experience)) + 
+ geom_boxplot(aes(x=""), colour="black", fill="white")+
+  coord_flip()+ 
+  labs(x = "", y = "")
+
+g1
+g2
+```
+
+```{r}
+# hist
+g1 <- ggplot(df, aes(x=family_size)) + 
+ geom_histogram(aes(y=..density..), colour="black", fill="white")+
+ geom_density(alpha=.2, fill="#FF6666")+ 
+  labs(x = "", y = "")
+
+# boxplot
+g2 <- ggplot(df, aes(y=family_size)) + 
+ geom_boxplot(aes(x=""), colour="black", fill="white")+
+  coord_flip()+ 
+  labs(x = "", y = "")
+
+g1
+g2
+```
+
+
+
+**Question 2: What is the frequency of age groups?**
+
+_ We calculated the age of each individual from the days birth column in our data, and then we preferred to analyze the data by dividing it into age groups at certain intervals. When we look at the table below, the age group that made the most credit card applications in our data is 35-44.
+
+
+```{r}
+tab<-data.frame(table(df$age_group))
+tab
+```
+
+```{r}
+ggplot(tab,aes(x=Var1,y=Freq,fill=Var1))+geom_bar(stat="identity")+labs(title="distribution chart of age groups by frequency",y="frequency",x="age group")+
+  theme(legend.position="none")+geom_text(aes(label=Freq))
+```
+
+
+
+**Question 3: What is the distribution of data in groups consisting of is_working, age_group and target?**
+
+```{r}
+library(ggmosaic)
+ggplot(data=df)+ geom_mosaic(aes(x = product(is_working, age_group), fill=is_working, conds=product(target)))+  scale_alpha_manual(values =c(.7,.9)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5))+scale_fill_brewer(palette="Paired")
+```
+
+
+**Question 4: How can you interpret age distribution by gender?**
+
+_ We can say that age of female credit card applicants is older than the male ones on the average. For females, they have bimodal distribution and we can say that the majority of credit card applicants for men cover a younger population. For both case, they seem to have common minimum and maximum points.
+
+
+```{r}
+p <- ggplot(df, aes(x=gender, y=age, fill=gender)) + geom_violin(trim=FALSE)  + geom_boxplot(width=0.2,fill="beige") + ggtitle("age distribution by gender")+scale_fill_brewer(palette="Accent")
+p
+```
+
+**Question 5: What is the association between annual income and experience according to gender?**
+
+
+```{r}
+set.seed(100)
+df1 = df[sample(1:nrow(df),4000),]
+ggplot(df1,aes(x=no_loan,y=amt_income,col=gender))+geom_point()+labs(title="association between income and experience by gender")+ scale_color_brewer(palette="Set1")
+```
+
+**Question 6: How are the credit card applications evaluated as bad(target:1) or good(target:0) according to education level and monthly income?**
+
+```{r}
+df %>% ggplot(aes(x = target, y = amt_income, color = education_type)) + geom_boxplot()
+```
+
+
+**Question 7: How does the target affected by income and experience?**
+
+```{r}
+ggplot(df,aes(x=experience,y=amt_income))+geom_point(col="pink")+labs(title = "The effects of annual income and experience on target")+geom_smooth()+facet_wrap(.~target)
+```
+
+**Question 8:  What is the distribution of group consisting of target, age_group and month_begin columns?**
+
+```{r}
+ggplot(df, aes(x = month_begin)) +
+  geom_density(aes(color = target)) +
+  facet_wrap(~age_group)
+```
+
+**Question 9:  What is the distribution of group consisting of target, month_begin and is_working columns?**
+
+```{r}
+ggplot(df, aes(x = month_begin)) +
+  geom_density(aes(color = target)) +
+  facet_wrap(~is_working)
+```
+**Question 10:  What is the distribution of group consisting of target, num_pastdues and is_working columns?**
+
+```{r}
+ggplot(df, aes(x = num_pastdues)) +
+  geom_density(aes(color = target)) +
+  facet_wrap(~is_working)
+```
+
+
+**Question 11:  What is the distribution of the group consisting of target, num_pastdues and is_working columns?**
+
+
+```{r}
+a <- ggplot(df, aes(x = num_pastdues))
+```
+
+```{r}
+a + geom_density(aes(color = target, fill = target),
+                         alpha = 0.4, position = "identity") +
+  scale_fill_manual(values = c("#00AFBB", "#E7B800")) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+```
+**Question 12:  What is the distribution of group consisting of target, num_pastdues and is_working columns?**
+
+```{r}
+set.seed(300)
+s = df[sample(1:nrow(df),700),]
+ggplot(s,aes(x=month_begin,y=amt_income,size=num_pastdues,col=target))+geom_point()+labs(title="-------")+ scale_color_brewer(palette="Paired")
+```
+
+
+
+# Confirmatory Data Analysis
+
+
+**Question 1: What is the ratio of working people in the data set by gender? (Odds Ratio)**
+
+
+```{r}
+odds.ratio <- function(x, conf.level=0.95) {
+  OR <- x[1,1] * x[2,2] / ( x[2,1] * x[1,2] )
+  SE <- sqrt(sum(1/x))
+  CI <- exp(log(OR) + c(-1,1) * qnorm(0.5*(1-conf.level), lower.tail=F) * SE )
+  list(estimator=OR,
+       SE=SE,
+       conf.interval=CI,
+       conf.level=conf.level)
+}
+```
+
+```{r}
+or<-table(df$gender,df$is_working)
+or
+```
+
+```{r}
+odds.ratio(or)
+```
+
+According to the result (0.33), individuals who are working, are 0.33 times higher for females compared to males.
+
+
+
+**Question 2: What is the probability that an applicant who owns realty is in the target risk group? (Relative Risk)**
+
+```{r}
+or1<-table(df$own_realty,df$target)
+or1
+```
+
+```{r}
+# Relative Risk
+rr <- (or1[1, 1] / (or1[1, 1] + or1[1, 2])) / (or1[2, 1] / (or1[2, 1] + or1[2, 2]))
+rr 
+```
+
+We could say that an applicant who owns a realty is .0053% less likely to be in target risk group. (1- 0.994712 = 0.005288)
+
+
+**Question 3: What is the relationship between the gender of the applicants and the target risk group? (Yule’s Q)**
+
+```{r}
+or2<-table(df$gender,df$target)
+or2
+```
+
+```{r}
+q <- ((or2[1, 1] * or2[2, 2]) - (or2[1, 2] * or2[2, 1])) / ((or2[1, 1] * or2[2, 2]) + (or2[1, 2] * or2[2, 1]))
+q
+```
+
+As we can say, there is no strong association between applicants' gender and being in a target group.
+
+**Question 3: **
+
+```{r}
+
+```
+
+
+
+
+
+
+
+# Data Preprocessing
+
+```{r}
+str(df)
+```
+
+```{r}
+df$days_birth <- NULL
+df$days_employed <- NULL
+df$age_group <- NULL
+```
+
+```{r}
+dim(df)
+```
+
+
+
+
+## Boruta
+
+I was not really sure whether I need to convert the all categorical variable into numeric variable (using one hot encoding) before applying Boruta however, I have been witnessed that it causes Boruta run very slow. After some research I learned that converting input variables from categorical to numeric is not necessary.
+
+```{r}
+boruta.df <- Boruta(target~., data = df, doTrace = 2)
+print(boruta.df)
+```
+
+```{r}
+attStats(boruta.df)
+```
+
+```{r}
+plot(boruta.df, xlab = "", xaxt = "n")
+lz<-lapply(1:ncol(boruta.df$ImpHistory),function(i)
+boruta.df$ImpHistory[is.finite(boruta.df$ImpHistory[,i]),i])
+names(lz) <- colnames(boruta.df$ImpHistory)
+Labels <- sort(sapply(lz,median))
+axis(side = 1,las=2,labels = names(Labels),
+at = 1:ncol(boruta.df$ImpHistory), cex.axis = 0.7)
+```
+
+
+```{r}
+df <- df %>% mutate(housing_type= recode(housing_type, 
+  "Co-op apartment" = "1",
+  "Municipal apartment" = "1",
+  "House / apartment" = "1",
+  "Office apartment" = "1",
+  "Rented apartment" = "1",
+  "With parents" = "0"))
+```
+
+```{r}
+df <- df %>% mutate(family_status= recode(family_status, 
+  "Civil marriage" = "1",
+  "Married" = "1",
+  "Separated" = "0",
+  "Single / not married" = "0",
+  "Widow" = "0"))                   
+```
+
+```{r}
+df <- df %>% mutate(education_type= recode(education_type, 
+  "Academic degree" = "Academic",
+  "Higher education" = "Higher",
+  "Incomplete higher" = "Higher",
+  "Lower secondary" = "Secondary",
+  "Secondary / secondary special" = "Secondary"))                   
+```
+
+
+
+
+```{r}
+summary(df)
+```
+
+```{r}
+str(df)
+```
+
+
+## One hot encoding
+
+```{r}
+vars <- c("education_type","income_type")
+```
+
+```{r}
+treatplan <- designTreatmentsZ(df, vars, verbose = FALSE) 
+```
+
+```{r}
+scoreFrame <- treatplan %>% 
+ magrittr::use_series(scoreFrame) %>% 
+ select(varName, origName, code)
+```
+
+```{r}
+newvars <- scoreFrame %>%
+ filter(code %in% c("clean","lev")) %>% 
+ magrittr::use_series(varName)
+```
+
+
+```{r}
+scoreColsToPrint <- c('origName','varName','code','rsq','sig','extraModelDegrees')
+print(treatplan$scoreFrame[,scoreColsToPrint])
+```
+
+```{r}
+df.treat <- vtreat::prepare(treatplan, df, varRestriction = newvars)
+```
+
+```{r}
+dim(df.treat)
+```
+
+```{r}
+head(df.treat,10)
+```
+```{r}
+str(df)
+```
+
+
+```{r}
+df1 <- df[,c("id","gender","own_car","own_realty","own_children","amt_income","work_phone","phone","email","family_size","month_begin","target","is_working","in_relationship","age","experience")] 
+head(df1,10)
+```
+
+```{r}
+data <- merge(df1, df.treat, by = 'row.names', all = TRUE)
+data$Row.names <- NULL
+dim(data)
+head(data)
+```
+
+```{r}
+data <- data[order(data$id),]
+row.names(data) <- NULL
+head(data)
+```
+
+```{r}
+data$no_loan <- NULL
+data$paid_off <- NULL
+data$num_pastdues <- NULL
+```
+
+```{r}
+#write.csv(data,"C:/Users/esras/OneDrive/Desktop/data_clean.csv")
+```
+
+
+
+## Cross validation
+
+set.seed(123) # setting seed to generate a reproducible random sampling
+defining training control as repeated cross-validation and value of K is 10 and repetition is 4 times
+folds <- createMultiFolds(y=data$target, k=10, times=400)
+train  <- data[folds[[1]], ] # generating training dataset from the random_sample
+test <- data[-folds[[1]], ] 
+
+```{r}
+set.seed(412) # setting seed to generate a reproducible random sampling
+# creating training data as 80% of the dataset
+random_sample <- createDataPartition(y=data$target, p = 0.7, list = FALSE)
+# generating training dataset from the random_sample
+train  <- data[random_sample, ]
+# generating testing dataset from rows which are not included in random_sample
+test <- data[-random_sample, ]
+
+dim_dataset=dim(data)
+dim_train=dim(train)
+dim_test=dim(test)
+cbind(dim_dataset,dim_train,dim_test)
+```
+
+```{r}
+prop.table(table(train$target))
+```
+
+```{r}
+prop.table(table(test$target))
+```
+
+```{r}
+summary(train)
+```
+
+```{r}
+summary(test)
+```
+
+
+## SMOTE
+
+
+```{r}
+balanced.train <- SMOTE(target ~., train, perc.over = 600, perc.under = 120)
+
+as.data.frame(table(balanced.train$target))
+```
+
+```{r}
+prop.table(table(balanced.train$target))
+```
+
+
+## Transformation
+
+
+```{r}
+which( colnames(balanced.train)=="age" )
+```
+```{r}
+which( colnames(balanced.train)=="amt_income" )
+```
+```{r}
+which( colnames(balanced.train)=="experience" )
+```
+```{r}
+which( colnames(balanced.train)=="family_size" )
+```
+```{r}
+which( colnames(balanced.train)=="month_begin" )
+```
+
+```{r}
+which( colnames(balanced.train)=="own_children" )
+```
+```{r}
+scale01 <- function(x){
+  (x - min(x)) / (max(x) - min(x))
+}
+
+balanced.train <- balanced.train  %>%
+  mutate(age = scale01(age), 
+         amt_income = scale01(amt_income),
+         experience = scale01(experience),
+         family_size = scale01(family_size),
+         month_begin = scale01(month_begin),
+         own_children = scale01(own_children))
+
+summary(balanced.train [c(15,6,16,10,11,5)])
+```
+
+```{r}
+scale01 <- function(x){
+  (x - min(x)) / (max(x) - min(x))
+}
+
+test <- test %>%
+  mutate(age = scale01(age), 
+         amt_income = scale01(amt_income),
+         experience = scale01(experience),
+         family_size = scale01(family_size),
+         month_begin = scale01(month_begin),
+         own_children = scale01(own_children))
+
+summary(test[c(15,6,16,10,11,5)])
+```
+
+
+## Feature selection
+
+
+
+
+```{r}
+set.seed(100)
+rPartMod <- train(target ~ ., data=balanced.train, method="rpart")
+rpartImp <- varImp(rPartMod)
+print(rpartImp)
+```
+
+
+```{r}
+glm_model = glm(target ~., data = balanced.train, family = "binomial")
+```
+
+```{r}
+credit_glm_back <- stats::step(glm_model) # backward selection (if you don't specify anything)
+summary(credit_glm_back)
+credit_glm_back$deviance
+AIC(credit_glm_back)
+BIC(credit_glm_back)
+```
+
+```{r}
+credit_glm_back_BIC <- stats::step(glm_model, k=log(nrow(balanced.train))) 
+summary(credit_glm_back_BIC)
+credit_glm_back_BIC$deviance
+AIC(credit_glm_back_BIC)
+BIC(credit_glm_back_BIC)
+```
+
+```{r}
+str(balanced.train)
+```
+"begin_month","Income","Experience","In_Relationship",
+                     "Education_Higher education","Education_secondary","Own_Realty",
+                     "Family_Status_Single","Family_Member_Count","Is_Working",
+                     "Own_Car","Age"]
+
+
+
+```{r}
+sub_train <- balanced.train[ ,c("target", "own_car", "own_realty", "own_children",
+    "amt_income", "family_size", "month_begin",
+    "in_relationship","age", "experience",
+    "education_type_lev_x_Higher",
+    "is_working")]
+```
+
+```{r}
+dim(sub_train)
+```
+
+```{r}
+sub_train %>% glimpse()
+```
+
+
+
+
+
+# Modelling
+
+## Logistic Regression
+
+
+```{r}
+glm_model = glm(target ~., family = "binomial", data = sub_train)
+```
+
+```{r}
+summary(glm_model)
+```
+
+```{r}
+LRT <- function(x, conf.level = 0.95) {
+  model <- x
+  dev <- model$null.deviance - model$deviance
+  dof <- model$df.null - model$df.residual
+  if (dev > qchisq(conf.level, dof)) { print("At least one of the explanatory variables are significant")
+  } else print("This model is not significant")
+}
+
+LRT(glm_model)
+```
+
+```{r}
+exp(coef(glm_model))  # or you can use "glm_model$coef" or "coef(glm_model)" gives the model coefficient
+```
+
+```{r}
+predicted <- predict(glm_model, sub_train, type="response")
+head(predicted)
+```
+
+```{r}
+optCutOff <- optimalCutoff(sub_train$target, predicted)[1] 
+optCutOff
+```
+
+```{r}
+model_glm_pred = ifelse(predicted > optCutOff, 1, 0)
+head(model_glm_pred)
+```
+
+```{r}
+train_tab = table(predicted = model_glm_pred, actual = sub_train$target)
+train_tab
+```
+```{r}
+which(colnames(test)=="target" )
+```
+
+```{r}
+predicted2 <- predict(glm_model, test[,-c(12)], type="response")
+pred.test = ifelse(predicted2 > 0.9, 1, 0)
+head(pred.test)
+```
+
+```{r}
+glm_pred <- as.factor(pred.test)
+
+summary(glm_pred)
+```
+
+```{r}
+act <- as.factor(test$target)
+
+summary(act)
+```
+
+```{r}
+F1_Score(glm_pred,act)
+```
+
+```{r}
+cm <- caret::confusionMatrix(glm_pred,act)
+print(cm) 
+```
+
+```{r}
+ConfusionTableR::binary_visualiseR(train_labels= glm_pred,
+                                   truth_labels= act,
+                                   class_label1 = "Not Stranded", 
+                                   class_label2 = "Stranded",
+                                   quadrant_col1 = "#28ACB4", 
+                                   quadrant_col2 = "#4397D2", 
+                                   custom_title = "Confusion Matrix for Logistic Regression", 
+                                   text_col= "black")
+
+```
+
+```{r}
+mcc<-(10572*8-176*180)/sqrt((176+8)*(10572+180)*(10572+176)*(180+8))
+mcc
+```
+
+
+```{r}
+varImp(glm_model, scale = FALSE)
+```
+
+
+## SVM
+
+
+```{r}
+set.seed(1)
+svm_model <- svm(target ~., data=sub_train, kernel="radial", type="C-classification")
+```
+
+```{r}
+svm_model
+```
+
+```{r}
+svm_model$gamma
+```
+
+
+```{r}
+svm_pred <- predict(svm_model, newdata = test[,-c(12)])
+```
+
+```{r}
+svm_pred <- as.factor(svm_pred)
+summary(svm_pred)
+```
+
+```{r}
+F1_Score(svm_pred,act)
+```
+
+```{r}
+cm <- caret::confusionMatrix(svm_pred,act)
+print(cm) 
+```
+
+```{r}
+ConfusionTableR::binary_visualiseR(train_labels= svm_pred,
+                                   truth_labels= act,
+                                   class_label1 = "Not Stranded", 
+                                   class_label2 = "Stranded",
+                                   quadrant_col1 = "#28ACB4", 
+                                   quadrant_col2 = "#4397D2", 
+                                   custom_title = "Confusion Matrix for Support Vector Machine", 
+                                   text_col= "black")
+
+```
+```{r}
+mcc<-(10397*16-168*355)/sqrt((168+16)*(10397+255)*(10397+168)*(355+16))
+mcc
+```
+
+
+
+
+## RF
+
+
+```{r}
+set.seed(1)
+
+rf_model <- randomForest(target ~ ., sub_train)
+
+rf_pred <- predict(rf_model, newdata = test[,-c(12)])
+```
+
+```{r}
+rf_pred <- as.factor(rf_pred)
+
+summary(rf_pred)
+```
+
+```{r}
+act <- as.factor(test$target)
+
+summary(act)
+```
+
+```{r}
+F1_Score(rf_pred,act)
+```
+
+```{r}
+cm <- caret::confusionMatrix(rf_pred,act)
+print(cm) 
+```
+
+
+```{r}
+ConfusionTableR::binary_visualiseR(train_labels= rf_pred,
+                                   truth_labels= act,
+                                   class_label1 = "Not Stranded", 
+                                   class_label2 = "Stranded",
+                                   quadrant_col1 = "#28ACB4", 
+                                   quadrant_col2 = "#4397D2", 
+                                   custom_title = "Confusion Matrix for Random Forests", 
+                                   text_col= "black")
+
+```
+
+```{r}
+mcc<-(10252*33-151*500)/sqrt((151+33)*(10252+500)*(10252+151)*(500+33))
+mcc
+```
+
+```{r}
+plot(rf_model, ylim=c(0,0.36))
+legend('topright', colnames(rf_model$err.rate), col=1:3, fill=1:3)
+```
+
+```{r}
+# Get importance
+importance    <- importance(rf_model)
+varImportance <- data.frame(Variables = row.names(importance), 
+                            Importance = round(importance[ ,'MeanDecreaseGini'],2))
+
+# Create a rank variable based on importance
+rankImportance <- varImportance %>%
+  mutate(Rank = paste0('#',dense_rank(desc(Importance))))
+
+# Use ggplot2 to visualize the relative importance of variables
+ggplot(rankImportance, aes(x = reorder(Variables, Importance), 
+    y = Importance, fill = Importance)) +
+  geom_bar(stat='identity') + 
+  geom_text(aes(x = Variables, y = 0.5, label = Rank),
+    hjust=0, vjust=0.55, size = 4, colour = 'red') +
+  labs(x = 'Variables') +
+  coord_flip()
+```
+
+
+## ANN
+
+```{r}
+train_copy <- sub_train 
+test_copy <- test 
+```
+
+```{r}
+str(train_copy)
+```
+
+```{r}
+train_copy$target <- as.integer(as.character(train_copy$target))
+train_copy$own_car <- as.integer(as.character(train_copy$own_car))
+train_copy$own_realty <- as.integer(as.character(train_copy$own_realty))
+train_copy$in_relationship <- as.integer(as.character(train_copy$in_relationship))
+train_copy$is_working <- as.integer(as.character(train_copy$is_working))
+```
+
+```{r}
+test_copy$target <- as.integer(as.character(test_copy$target))
+test_copy$own_car<- as.integer(as.character(test_copy$own_car))
+test_copy$own_realty <- as.integer(as.character(test_copy$own_realty))
+test_copy$in_relationship <- as.integer(as.character(test_copy$in_relationship))
+test_copy$is_working <- as.integer(as.character(test_copy$is_working))
+```
+
+
+```{r}
+set.seed(123)
+
+Hab_NN1  <- neuralnet(target ~., 
+                     data = train_copy, 
+                     linear.output = FALSE, 
+                     err.fct = 'ce', 
+                     likelihood = TRUE)
+```
+
+```{r}
+plot(Hab_NN1 , rep = 'best')
+```
+
+
+```{r}
+Hab_NN1_Train_Error <- Hab_NN1$result.matrix[1,1]
+paste("CE Error: ", round(Hab_NN1_Train_Error, 3)) 
+
+Hab_NN1_AIC <- Hab_NN1$result.matrix[4,1]
+paste("AIC: ", round(Hab_NN1_AIC,3))
+
+Hab_NN2_BIC <- Hab_NN1$result.matrix[5,1]
+paste("BIC: ", round(Hab_NN2_BIC, 3))
+```
+
+```{r}
+predicted <- predict(Hab_NN1, train_copy, type="response")
+head(predicted)
+```
+
+```{r}
+optCutOff <- optimalCutoff(train_copy$target, predicted)[1] 
+optCutOff
+```
+
+```{r}
+ann_pred <- ifelse(predict(Hab_NN1, type = "response", newdata = test_copy[,-c(12)]) >optCutOff, 1,0)
+head(ann_pred)
+```
+
+
+```{r}
+ann_pred <- as.factor(ann_pred)
+
+summary(ann_pred)
+```
+
+```{r}
+act <- as.factor(test_copy$target)
+
+summary(act)
+```
+
+```{r}
+F1_Score(ann_pred,act)
+```
+
+```{r}
+cm <- caret::confusionMatrix(ann_pred,act)
+print(cm) 
+```
+
+
+```{r}
+ConfusionTableR::binary_visualiseR(train_labels= ann_pred,
+                                   truth_labels= act,
+                                   class_label1 = "Not Stranded", 
+                                   class_label2 = "Stranded",
+                                   quadrant_col1 = "#28ACB4", 
+                                   quadrant_col2 = "#4397D2", 
+                                   custom_title = "Confusion Matrix for Artificial Neural Network", 
+                                   text_col= "black")
+
+```
+```{r}
+mcc<-(8194*72-112*2558)/sqrt((112+72)*(8194+2558)*(8194+112)*(2558+72))
+mcc
+```
+
+
+```{r}
+set.seed(123)
+# 2-Hidden Layers, Layer-1 2-neurons, Layer-2, 1-neuron
+Hab_NN2 <- neuralnet(target ~., 
+                     data = train_copy, 
+                     linear.output = FALSE, 
+                     err.fct = 'ce', 
+                     likelihood = 
+                     TRUE, hidden = c(2,1),
+                     threshold=0.04, stepmax=1e7)
+
+```
+
+
+```{r}
+Hab_NN2_Train_Error <- Hab_NN2$result.matrix[1,1]
+paste("CE Error: ", round(Hab_NN2_Train_Error, 3)) 
+
+Hab_NN2_AIC <- Hab_NN2$result.matrix[4,1]
+paste("AIC: ", round(Hab_NN1_AIC,3))
+
+Hab_NN2_BIC <- Hab_NN2$result.matrix[5,1]
+paste("BIC: ", round(Hab_NN2_BIC, 3))
+```
+
+```{r}
+# 2-Hidden Layers, Layer-1 2-neurons, Layer-2, 2-neurons
+set.seed(123)
+Hab_NN3 <- neuralnet(target ~., 
+                                data = train_copy, 
+                                linear.output = FALSE, 
+                                err.fct = 'ce', 
+                                likelihood = TRUE, 
+                                hidden = c(2,2))
+```
+
+```{r}
+Hab_NN3_Train_Error <- Hab_NN3$result.matrix[1,1]
+paste("CE Error: ", round(Hab_NN3_Train_Error, 3)) 
+
+Hab_NN3_AIC <- Hab_NN3$result.matrix[4,1]
+paste("AIC: ", round(Hab_NN3_AIC,3))
+
+Hab_NN3_BIC <- Hab_NN3$result.matrix[5,1]
+paste("BIC: ", round(Hab_NN3_BIC, 3))
+```
+
+
+```{r}
+# 2-Hidden Layers, Layer-1 1-neuron, Layer-2, 2-neuron
+set.seed(123)
+Hab_NN4 <- neuralnet(target ~., 
+                                data = train_copy, 
+                                linear.output = FALSE, 
+                                err.fct = 'ce', 
+                                likelihood = TRUE, 
+                                hidden = c(1,2))
+```
+
+
+
+```{r}
+Hab_NN4_Train_Error <- Hab_NN4$result.matrix[1,1]
+paste("CE Error: ", round(Hab_NN4_Train_Error, 3)) 
+
+Hab_NN4_AIC <- Hab_NN4$result.matrix[4,1]
+paste("AIC: ", round(Hab_NN4_AIC,3))
+
+Hab_NN4_BIC <- Hab_NN4$result.matrix[5,1]
+paste("BIC: ", round(Hab_NN4_BIC, 3))
+```
+
+
+
+```{r}
+#Bar plot of results
+Class_NN_ICs <- tibble('Network' = rep(c("NN1", "NN2", "NN3", "NN4"), each = 3), 
+                       'Metric' = rep(c('AIC', 'BIC'), length.out = 12, 'ce Error * 100'), 
+                       'Value' = c(Hab_NN1$result.matrix[4,1], Hab_NN1$result.matrix[5,1], 
+                                   100*Hab_NN1$result.matrix[1,1], Hab_NN2$result.matrix[4,1], 
+                                   Hab_NN2$result.matrix[5,1], 100*Hab_NN2$result.matrix[1,1],
+                                   Hab_NN3$result.matrix[4,1], Hab_NN3$result.matrix[5,1], 
+                                   100*Hab_NN3$result.matrix[1,1], Hab_NN4$result.matrix[4,1], 
+                                   Hab_NN4$result.matrix[5,1], 100*Hab_NN4$result.matrix[1,1]))
+
+
+Class_NN_ICs %>%
+  ggplot(aes(Network, Value, fill = Metric)) +
+  geom_col(position = 'dodge')  +
+  ggtitle("AIC, BIC, and Cross-Entropy Error of the Classification ANNs", "Note: ce Error displayed is 100 times its true value")
+
+```
+
+
+
+
+```{r}
+predicted <- predict(Hab_NN2, train_copy, type="response")
+head(predicted)
+```
+
+```{r}
+optCutOff <- optimalCutoff(train_copy$target, predicted)[1] 
+optCutOff
+```
+
+```{r}
+ann_pred <- ifelse(predict(Hab_NN2, type = "response", newdata = test_copy[,-c(12)]) >optCutOff, 1,0)
+head(ann_pred)
+```
+
+
+```{r}
+ann_pred <- as.factor(ann_pred)
+
+summary(ann_pred)
+```
+
+```{r}
+act <- as.factor(test_copy$target)
+
+summary(act)
+```
+
+```{r}
+F1_Score(ann_pred,act)
+```
+
+```{r}
+cm <- caret::confusionMatrix(ann_pred,act)
+print(cm) 
+```
+
+
+```{r}
+ConfusionTableR::binary_visualiseR(train_labels= ann_pred,
+                                   truth_labels= act,
+                                   class_label1 = "Not Stranded", 
+                                   class_label2 = "Stranded",
+                                   quadrant_col1 = "#28ACB4", 
+                                   quadrant_col2 = "#4397D2", 
+                                   custom_title = "Credit Card Approval Prediction Confusion Matrix", 
+                                   text_col= "black")
+
+```
+
+```{r}
+plot(Hab_NN2, rep = 'best')
+```
+
+
+
+
+
+
+
+## XGBoost
+
+```{r}
+sub_test <- test_copy[ ,c("target", "own_car", "own_realty", "own_children",
+    "amt_income", "family_size", "month_begin",
+    "in_relationship","age", "experience",
+    "education_type_lev_x_Higher",
+    "is_working")]
+```
+
+
+```{r}
+which(colnames(train_copy)=="target" )
+```
+```{r}
+which(colnames(sub_test)=="target" )
+```
+
+
+```{r}
+X_train = data.matrix(train_copy[,-1])                  # independent variables for train
+y_train = train_copy[,1]                                # dependent variables for train
+  
+X_test = data.matrix(sub_test[,-1])                    # independent variables for test
+y_test = sub_test[,1]                                   # dependent variables for test
+```
+
+```{r}
+xgboost_train = xgb.DMatrix(data=X_train, label=y_train)
+xgboost_test = xgb.DMatrix(data=X_test, label=y_test)
+```
+
+
+```{r}
+xgboost_model <- xgboost(data = xgboost_train,
+                         objective = "binary:logistic",
+                         max.depth=3,                            # max depth 
+                         nrounds=2)                             # max number of boosting iterations
+xgboost_model
+```
+
+
+```{r}
+xg_pred <-predict(xgboost_model, xgboost_test)
+```
+
+
+
+```{r}
+optCutOff <- optimalCutoff(y_test, xg_pred)[1] 
+optCutOff
+```
+
+```{r}
+xg_pred <-as.factor(ifelse(xg_pred>optCutOff, 1,0))
+```
+
+
+```{r}
+xg_pred <- as.factor(xg_pred)
+
+summary(xg_pred)
+```
+```{r}
+act <- as.factor(y_test)
+
+summary(act)
+```
+
+```{r}
+F1_Score(xg_pred,act)
+```
+
+```{r}
+cm <- caret::confusionMatrix(xg_pred, act)
+print(cm) 
+```
+
+
+```{r}
+ConfusionTableR::binary_visualiseR(train_labels= xg_pred,
+                                   truth_labels= act,
+                                   class_label1 = "Not Stranded", 
+                                   class_label2 = "Stranded",
+                                   quadrant_col1 = "#28ACB4", 
+                                   quadrant_col2 = "#4397D2", 
+                                   custom_title = "Confusion Matrix for XgBoost", 
+                                   text_col= "black")
+
+```
+```{r}
+mcc<-(10366*4-180*386)/sqrt((180+4)*(10366+386)*(10366+180)*(386+4))
+mcc
+```
+
+
+```{r}
+mat<-xgb.importance (feature_names = colnames(train_copy[, -1]),model = xgboost_model)
+xgb.plot.importance (mat)
+```
+
